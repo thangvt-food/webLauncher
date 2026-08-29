@@ -1,0 +1,12 @@
+# Build
+build/
+*.o
+*.user
+
+# IDE
+.vscode/
+.idea/
+compile_commands.json
+
+# Công cụ cá nhân
+.commandcode/

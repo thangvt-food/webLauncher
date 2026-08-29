@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt5 REQUIRED COMPONENTS Widgets Svg)
+find_package(Qt5 REQUIRED COMPONENTS Widgets)
 find_package(QTermWidget5 REQUIRED)
 
 add_executable(weblauncher
@@ -34,7 +34,6 @@ target_include_directories(weblauncher PRIVATE
 
 target_link_libraries(weblauncher PRIVATE
     Qt5::Widgets
-    Qt5::Svg
     qtermwidget5
 )
 

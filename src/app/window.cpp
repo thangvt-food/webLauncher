@@ -2,6 +2,8 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QBuffer>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -9,13 +11,16 @@
 #include <QFileDialog>
 #include <QFont>
 #include <QInputDialog>
+#include <QKeySequence>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPalette>
 #include <QSettings>
+#include <QShortcut>
 #include <QStatusBar>
 #include <QSplitter>
 #include <QTabWidget>
@@ -35,6 +40,10 @@
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_settings(new QSettings(QStringLiteral("WebLauncher"), QStringLiteral("WebLauncher"), this)) {
+    // Event filter cấp app để hiện context menu khi click phải trong terminal.
+    // TerminalDisplay (con của QTermWidget) nuốt right-click nên phải chặn ở
+    // tầng QApplication trước khi nó xử lý.
+    QApplication::instance()->installEventFilter(this);
     setupUi();
     m_db.load();
     reloadList();
@@ -69,6 +78,8 @@ void MainWindow::setupUi() {
     tb->addSeparator();
     m_favAction = tb->addAction(tr("☆ Yêu thích"), this, [this] { toggleFavorite(); });
     m_removeAction = tb->addAction(tr("🗑 Xóa"), this, [this] { removeProjectFromList(); });
+    tb->addSeparator();
+    m_copyLogAction = tb->addAction(tr("⧉ Copy log"), this, [this] { copyTerminalLog(); });
 
     // Danh sách dự án (trái)
     m_list = new QListWidget(this);
@@ -102,6 +113,20 @@ void MainWindow::setupUi() {
     m_tabs->setTabsClosable(true);
     m_tabs->setMovable(true);
     connect(m_tabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this](int) { updateRunButtonState(); });
+
+    // Phím tắt copy/paste theo chuẩn terminal. QTermWidget 1.4.0 không xử lý
+    // Ctrl+Shift+C/V nội bộ, nên dùng QShortcut cấp cửa sổ (terminal không
+    // chặn các tổ hợp này qua ShortcutOverride).
+    QShortcut* copySelSc = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+C")), this);
+    copySelSc->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(copySelSc, &QShortcut::activated, this, [this] { copyTerminalSelection(); });
+    QShortcut* copyLogSc = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+L")), this);
+    copyLogSc->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(copyLogSc, &QShortcut::activated, this, [this] { copyTerminalLog(); });
+    QShortcut* pasteSc = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+V")), this);
+    pasteSc->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(pasteSc, &QShortcut::activated, this, [this] { pasteToTerminal(); });
 
     QSplitter* splitter = new QSplitter(Qt::Horizontal, this);
     splitter->addWidget(m_list);
@@ -247,6 +272,9 @@ void MainWindow::openTerminal(const Project& p) {
     term->setColorScheme(QStringLiteral("Linux"));
     term->setScrollBarPosition(QTermWidget::ScrollBarRight);
     term->setTextCodec(QTextCodec::codecForName("UTF-8"));
+    // Context menu chuột phải được xử lý qua event filter cấp QApplication
+    // (xem constructor), vì TerminalDisplay nuốt right-click và không sinh
+    // ContextMenu event.
 
     const QString cmd = p.effectiveCommand();
     const QString line = QStringLiteral("cd %1 && clear && echo '▶ Đang chạy: %2' && %3\n")
@@ -367,6 +395,7 @@ void MainWindow::updateRunButtonState() {
     m_stopAction->setEnabled(has);
     m_favAction->setEnabled(has);
     m_removeAction->setEnabled(has);
+    m_copyLogAction->setEnabled(m_tabs && m_tabs->currentWidget() != nullptr);
 }
 
 void MainWindow::applySettings() {
@@ -394,10 +423,6 @@ void MainWindow::onProjectStopped(const QString& projectPath) {
     updateRunButtonState();
 }
 
-QWidget* MainWindow::currentTabTerminal() const {
-    return m_tabs->currentWidget();
-}
-
 void MainWindow::closeEvent(QCloseEvent* event) {
     const bool minimizeToTray = m_settings->value(QStringLiteral("minimizeToTray"), true).toBool();
     if (minimizeToTray && m_tray->isVisible()) {
@@ -406,4 +431,79 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
     event->accept();
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        QMouseEvent* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::RightButton) {
+            QWidget* w = qobject_cast<QWidget*>(watched);
+            if (!w)
+                return QMainWindow::eventFilter(watched, event);
+            // Tìm QTermWidget tổ tiên của widget đang được click
+            QWidget* ancestor = w;
+            while (ancestor && !qobject_cast<QTermWidget*>(ancestor))
+                ancestor = ancestor->parentWidget();
+            if (ancestor) {
+                QTermWidget* term = static_cast<QTermWidget*>(ancestor);
+                QMenu menu(term);
+                QAction* copySel = menu.addAction(tr("⧉ Copy"), this, [term] {
+                    if (!term->selectedText().isEmpty())
+                        term->copyClipboard();
+                });
+                copySel->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+C")));
+                QAction* copyAll = menu.addAction(tr("⧉ Copy toàn bộ log"), this, [this, term] {
+                    copyHistoryToClipboard(term);
+                });
+                copyAll->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+L")));
+                menu.addSeparator();
+                QAction* paste = menu.addAction(tr("📋 Paste"), this, [term] { term->pasteClipboard(); });
+                paste->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+V")));
+                menu.addSeparator();
+                menu.addAction(tr("🔍 Tìm kiếm"), term, &QTermWidget::toggleShowSearchBar);
+                menu.exec(w->mapToGlobal(me->pos()));
+                event->accept();
+                return true;
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+QTermWidget* MainWindow::currentTerminal() const {
+    return qobject_cast<QTermWidget*>(m_tabs->currentWidget());
+}
+
+void MainWindow::copyTerminalLog() {
+    QTermWidget* term = currentTerminal();
+    if (!term)
+        return;
+    copyHistoryToClipboard(term);
+}
+
+void MainWindow::copyHistoryToClipboard(QTermWidget* term) {
+    if (!term)
+        return;
+    QBuffer buffer;
+    buffer.open(QIODevice::ReadWrite);
+    term->saveHistory(&buffer);
+    const QString text = QString::fromUtf8(buffer.data());
+    if (!text.isEmpty())
+        QApplication::clipboard()->setText(text);
+    m_status->setText(tr("Đã copy log vào clipboard"));
+}
+
+void MainWindow::copyTerminalSelection() {
+    QTermWidget* term = currentTerminal();
+    if (!term)
+        return;
+    const QString text = term->selectedText();
+    if (!text.isEmpty())
+        QApplication::clipboard()->setText(text);
+}
+
+void MainWindow::pasteToTerminal() {
+    QTermWidget* term = currentTerminal();
+    if (term)
+        term->pasteClipboard();
 }

@@ -9,6 +9,7 @@ class QListWidgetItem;
 class QTabWidget;
 class QLabel;
 class QSettings;
+class QTermWidget;
 
 #include "core/database.h"
 #include "core/project.h"
@@ -37,9 +38,13 @@ private slots:
     void removeProjectFromList();
     void closeTab(int index);
     void onProjectStopped(const QString& projectPath);
+    void copyTerminalLog();
+    void copyTerminalSelection();
+    void pasteToTerminal();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void setupUi();
@@ -48,7 +53,8 @@ private:
     void updateRunButtonState();
     void trackRecent(const Project& p);
     void applySettings();
-    QWidget* currentTabTerminal() const;
+    QTermWidget* currentTerminal() const;
+    void copyHistoryToClipboard(QTermWidget* term);
 
     Database m_db;
     QListWidget* m_list = nullptr;
@@ -58,6 +64,7 @@ private:
     QAction* m_stopAction = nullptr;
     QAction* m_favAction = nullptr;
     QAction* m_removeAction = nullptr;
+    QAction* m_copyLogAction = nullptr;
     TrayIcon* m_tray = nullptr;
     QSettings* m_settings = nullptr;
     QVector<Project> m_projects; // danh sách hiển thị

@@ -1,0 +1,22 @@
+slug: weblauncher
+name: Web Launcher
+tagline: Khởi chạy nhanh dự án web bằng app Qt native
+url: https://github.com/thangvt-food/webLauncher
+status: paused
+visibility: private
+description: Ứng dụng native C++/Qt5 giúp mở nhanh các dự án React, Next.js, Vite mà không cần gõ lệnh.
+tags:
+  - desktop
+  - qt
+  - developer-tools
+category: dev
+tech:
+  - cpp
+  - qt
+hosting: local
+updated: '2026-08-29'
+icon: 🚀
+auth: none
+links:
+  repo: https://github.com/thangvt-food/webLauncher
+notes: Repo public, build bằng CMake; chưa có bản phát hành.
